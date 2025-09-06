@@ -13,3 +13,5 @@ xarray
 netCDF4
 folium
 streamlit-folium
+earthengine-api
+geemap
