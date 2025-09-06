@@ -8,3 +8,8 @@ matplotlib
 shapely
 requests
 scipy
+pandas
+xarray
+netCDF4
+folium
+streamlit-folium
