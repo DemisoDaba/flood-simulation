@@ -1,0 +1,10 @@
+streamlit
+streamlit-autorefresh
+tenacity
+rasterio
+geopandas
+numpy
+matplotlib
+shapely
+requests
+scipy
