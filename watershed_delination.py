@@ -1,4 +1,3 @@
-# delineate_watershed_pysheds.py
 """
 Streamlit app: Delineate watershed (upstream area) from an outlet using a local DEM (GeoTIFF) with pysheds.
 No GEE required.
@@ -72,33 +71,26 @@ st.sidebar.write(f"DEM bounds: {dem_bounds}")
 st.write("## 2) Choose outlet point")
 st.write("Click on map to place outlet, or enter lat,lon manually in sidebar.")
 
-# Center map on DEM
 cent_y = (dem_bounds.top + dem_bounds.bottom) / 2.0
 cent_x = (dem_bounds.left + dem_bounds.right) / 2.0
 m = folium.Map(location=[cent_y, cent_x], zoom_start=9)
+
+# Add DEM bounds rectangle (without popup to avoid st_folium error)
 folium.Rectangle(
     bounds=[[dem_bounds.bottom, dem_bounds.left], [dem_bounds.top, dem_bounds.right]],
     color="blue", weight=1, fill=False
 ).add_to(m)
 
 st_map = st_folium(m, height=450, returned_objects=["last_clicked"])
-manual_coords = st.sidebar.text_input(
-    "Manual outlet lat,lon (e.g. 9.0,38.7). Leave blank to use map click or center."
-)
+manual_coords = st.sidebar.text_input("Manual outlet lat,lon (e.g. 9.0,38.7)")
 
-# -----------------------------
-# 3) Determine outlet coordinates
-# -----------------------------
 clicked = st_map.get("last_clicked") if st_map else None
 outlet_lat, outlet_lon = None, None
 
-# Use clicked point if available
 if clicked:
     outlet_lat = clicked["lat"]
     outlet_lon = clicked["lng"]
     st.sidebar.success(f"Clicked: {outlet_lat:.6f}, {outlet_lon:.6f}")
-
-# Else use manual input if valid
 elif manual_coords:
     try:
         lat, lon = [float(x.strip()) for x in manual_coords.split(",")]
@@ -107,18 +99,12 @@ elif manual_coords:
     except:
         st.sidebar.error("Use format: lat,lon")
         st.stop()
-
-# Else use DEM center as default
 else:
-    if dem_crs.to_string() != "EPSG:4326":
-        transformer = Transformer.from_crs(dem_crs, "EPSG:4326", always_xy=True)
-        outlet_lon, outlet_lat = transformer.transform(cent_x, cent_y)
-    else:
-        outlet_lat, outlet_lon = cent_y, cent_x
-    st.sidebar.info(f"No point selected. Using DEM center: {outlet_lat:.6f}, {outlet_lon:.6f}")
+    st.info("Click map or input coordinates and press 'Delineate watershed'.")
+    st.stop()
 
 # -----------------------------
-# 4) Convert outlet to DEM CRS & row/col
+# 3) Convert outlet to DEM CRS & row/col
 # -----------------------------
 if dem_crs.to_string() != "EPSG:4326":
     transformer = Transformer.from_crs("EPSG:4326", dem_crs, always_xy=True)
@@ -130,34 +116,45 @@ inv_transform = ~dem_transform
 col_f, row_f = inv_transform * (outlet_x, outlet_y)
 row, col = int(np.floor(row_f)), int(np.floor(col_f))
 
-# Check if outlet is inside DEM
 if not (0 <= row < dem_arr.shape[0] and 0 <= col < dem_arr.shape[1]):
-    st.error("Outlet is outside DEM bounds. Adjust coordinates.")
+    st.error("Outlet is outside DEM bounds.")
     st.stop()
 
 st.write(f"Outlet mapped to DEM pixel row={row}, col={col}")
 
 # -----------------------------
-# 5) Hydrological processing with pysheds
+# 4) Hydrological processing with pysheds
 # -----------------------------
 st.write("## 3) Running hydrological preprocessing with pysheds...")
 
-grid = Grid.from_raster(temp_dem_path, data_name='dem')
-grid.fill_depressions('dem', out_name='flooded_dem')
-grid.resolve_flats('flooded_dem', out_name='inflated_dem')
-grid.flowdir(data='inflated_dem', out_name='dir', dirmap=Grid.D8)
-grid.accumulation(data='dir', out_name='acc')
+try:
+    grid = Grid()
+    # Add DEM as raster directly
+    grid.add_raster(dem_arr, transform=dem_transform, data_name='dem')
+    
+    # Fill depressions
+    grid.fill_depressions('dem', out_name='flooded_dem')
+    grid.resolve_flats('flooded_dem', out_name='inflated_dem')
+    
+    # Flow direction and accumulation
+    grid.flowdir(data='inflated_dem', out_name='dir', dirmap=Grid.D8)
+    grid.accumulation(data='dir', out_name='acc')
+
+except Exception as e:
+    st.error(f"Error processing DEM with pysheds: {e}")
+    st.stop()
 
 # -----------------------------
-# 6) Delineate upstream basin
+# 5) Delineate upstream basin
 # -----------------------------
 st.write("Computing upstream basin...")
+
 basin_mask = grid.catchment(x=outlet_x, y=outlet_y, data='dir', dirmap=Grid.D8)
 upstream_mask = basin_mask.astype(bool)
 st.write(f"Upstream mask has {upstream_mask.sum()} cells.")
 
 # -----------------------------
-# 7) Convert mask to polygon
+# 6) Convert mask to polygon
 # -----------------------------
 mask_uint8 = upstream_mask.astype(np.uint8)
 shapes_gen = shapes(mask_uint8, mask=mask_uint8==1, transform=dem_transform)
@@ -172,7 +169,7 @@ gdf = gpd.GeoDataFrame({"id":[1]}, geometry=[basin_geom], crs=dem_crs.to_string(
 gdf_wgs84 = gdf.to_crs("EPSG:4326") if dem_crs.to_string() != "EPSG:4326" else gdf.copy()
 
 # -----------------------------
-# 8) Display basin
+# 7) Display basin
 # -----------------------------
 st.write("## 4) Result: Delineated Basin")
 st.write(gdf)
@@ -187,7 +184,7 @@ folium.Marker(location=[outlet_lat, outlet_lon], popup="Outlet", icon=folium.Ico
 st_folium(m2, height=600)
 
 # -----------------------------
-# 9) Download
+# 8) Download
 # -----------------------------
 st.write("### Download basin polygon")
 geojson_str = gdf_wgs84.to_json()
