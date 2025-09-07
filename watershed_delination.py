@@ -4,7 +4,6 @@ No GEE required.
 
 Dependencies:
 streamlit
-streamlit-autorefresh
 numpy
 rasterio
 geopandas
@@ -16,7 +15,6 @@ pysheds
 """
 
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
 import numpy as np
 import rasterio
 from rasterio.features import shapes
@@ -30,6 +28,7 @@ import os
 import tempfile
 import json
 from shapely.ops import unary_union
+import time
 
 # -----------------------------
 # Streamlit page setup
@@ -88,7 +87,8 @@ manual_coords = st.sidebar.text_input("Manual outlet lat,lon (e.g. 9.0,38.7)")
 # -----------------------------
 # Auto-select DEM center after 20s
 # -----------------------------
-count = st_autorefresh(interval=1000, limit=20, key="autorefresh")
+if "start_time" not in st.session_state:
+    st.session_state.start_time = time.time()
 
 clicked = st_map.get("last_clicked") if st_map else None
 outlet_lat, outlet_lon = None, None
@@ -105,18 +105,15 @@ elif manual_coords:
     except:
         st.sidebar.error("Use format: lat,lon")
         st.stop()
-elif count >= 20:
-    # Auto-select DEM center
-    if dem_crs.to_string() == "EPSG:4326":
-        outlet_lat, outlet_lon = cent_y, cent_x
-    else:
-        # Transform center to EPSG:4326 for display
-        transformer = Transformer.from_crs(dem_crs, "EPSG:4326", always_xy=True)
-        outlet_lon, outlet_lat = transformer.transform(cent_x, cent_y)
-    st.sidebar.info(f"No outlet selected in 20s. Auto-using DEM center: {outlet_lat:.6f}, {outlet_lon:.6f}")
 else:
-    st.info("Click map or input coordinates and wait 20s to auto-select DEM center.")
-    st.stop()
+    elapsed = time.time() - st.session_state.start_time
+    if elapsed >= 20:
+        # Auto-select DEM center
+        outlet_lat, outlet_lon = cent_y, cent_x
+        st.sidebar.info(f"No outlet selected in 20s. Auto-using DEM center: {outlet_lat:.6f}, {outlet_lon:.6f}")
+    else:
+        st.info(f"Click map or input coordinates. Auto-select in {int(20 - elapsed)} seconds.")
+        st.stop()
 
 # -----------------------------
 # 3) Convert outlet to DEM CRS & row/col safely
