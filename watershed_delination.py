@@ -161,21 +161,17 @@ with rasterio.open(
 # Create empty Grid
 grid = Grid()
 
-# Read DEM into Grid properly
+# Read DEM into Grid
 grid.read_raster(safe_dem_path, data_name='dem', dtype='float32', nodata=-9999)
 
-# Access the Raster instance
-dem_raster = grid.view('dem')  # Now this returns a Raster
-
 # Hydrological preprocessing
-grid.fill_depressions(data=dem_raster, out_name='flooded_dem', nodata=-9999)
+# Pass 'dem' directly as the data name
+grid.fill_depressions(data='dem', out_name='flooded_dem', nodata=-9999)
 grid.resolve_flats('flooded_dem', out_name='inflated_dem')
 grid.flowdir('inflated_dem', out_name='dir', dirmap=Grid.D8)
 grid.accumulation('dir', out_name='acc')
 
 st.success("Hydrological preprocessing complete!")
-
-
 
 # -----------------------------
 # 5) Delineate upstream basin
