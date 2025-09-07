@@ -15,13 +15,5 @@ folium
 streamlit-folium
 earthengine-api
 geemap
-streamlit
-rasterio
 richdem
-numpy
-geopandas
-shapely
-folium
-streamlit-folium
 pyproj
-matplotlib
