@@ -140,10 +140,9 @@ st.write(f"Outlet mapped to DEM pixel row={row}, col={col} (clamped to DEM bound
 # -----------------------------
 st.write("## 3) Running hydrological preprocessing with pysheds...")
 
-# 1) Replace NaN with nodata and cast
+# Prepare DEM: replace nan with nodata=-9999 and cast to float32
 dem_cleaned = np.where(np.isnan(dem_arr), -9999, dem_arr).astype('float32')
 
-# 2) Save cleaned DEM temporarily
 safe_dem_path = os.path.join(tempfile.gettempdir(), "safe_dem.tif")
 with rasterio.open(
     safe_dem_path,
@@ -159,22 +158,23 @@ with rasterio.open(
 ) as dst:
     dst.write(dem_cleaned, 1)
 
-# 3) Create a Grid and read raster properly
 # Create empty Grid
 grid = Grid()
 
-# Read DEM properly as a Raster
+# Read DEM into Grid properly
 grid.read_raster(safe_dem_path, data_name='dem', dtype='float32', nodata=-9999)
 
-# Now perform hydrological preprocessing
-grid.fill_depressions(data=grid.view('dem'), out_name='flooded_dem', nodata=-9999)
+# Access the Raster instance
+dem_raster = grid.view('dem')  # Now this returns a Raster
+
+# Hydrological preprocessing
+grid.fill_depressions(data=dem_raster, out_name='flooded_dem', nodata=-9999)
 grid.resolve_flats('flooded_dem', out_name='inflated_dem')
 grid.flowdir('inflated_dem', out_name='dir', dirmap=Grid.D8)
 grid.accumulation('dir', out_name='acc')
 
-
-
 st.success("Hydrological preprocessing complete!")
+
 
 
 # -----------------------------
