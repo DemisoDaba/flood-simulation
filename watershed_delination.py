@@ -4,6 +4,7 @@ No GEE required.
 
 Dependencies:
 streamlit
+streamlit-autorefresh
 numpy
 rasterio
 geopandas
@@ -15,6 +16,7 @@ pysheds
 """
 
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 import numpy as np
 import rasterio
 from rasterio.features import shapes
@@ -71,12 +73,10 @@ st.sidebar.write(f"DEM bounds: {dem_bounds}")
 st.write("## 2) Choose outlet point")
 st.write("Click on map to place outlet, or enter lat,lon manually in sidebar.")
 
-# Center map on DEM
 cent_y = (dem_bounds.top + dem_bounds.bottom) / 2.0
 cent_x = (dem_bounds.left + dem_bounds.right) / 2.0
 m = folium.Map(location=[cent_y, cent_x], zoom_start=9)
 
-# Add DEM bounds rectangle
 folium.Rectangle(
     bounds=[[dem_bounds.bottom, dem_bounds.left], [dem_bounds.top, dem_bounds.right]],
     color="blue", weight=1, fill=False
@@ -84,6 +84,11 @@ folium.Rectangle(
 
 st_map = st_folium(m, height=450, returned_objects=["last_clicked"])
 manual_coords = st.sidebar.text_input("Manual outlet lat,lon (e.g. 9.0,38.7)")
+
+# -----------------------------
+# Auto-select DEM center after 20s
+# -----------------------------
+count = st_autorefresh(interval=1000, limit=20, key="autorefresh")
 
 clicked = st_map.get("last_clicked") if st_map else None
 outlet_lat, outlet_lon = None, None
@@ -100,8 +105,17 @@ elif manual_coords:
     except:
         st.sidebar.error("Use format: lat,lon")
         st.stop()
+elif count >= 20:
+    # Auto-select DEM center
+    if dem_crs.to_string() == "EPSG:4326":
+        outlet_lat, outlet_lon = cent_y, cent_x
+    else:
+        # Transform center to EPSG:4326 for display
+        transformer = Transformer.from_crs(dem_crs, "EPSG:4326", always_xy=True)
+        outlet_lon, outlet_lat = transformer.transform(cent_x, cent_y)
+    st.sidebar.info(f"No outlet selected in 20s. Auto-using DEM center: {outlet_lat:.6f}, {outlet_lon:.6f}")
 else:
-    st.info("Click map or input coordinates and press 'Delineate watershed'.")
+    st.info("Click map or input coordinates and wait 20s to auto-select DEM center.")
     st.stop()
 
 # -----------------------------
@@ -118,13 +132,11 @@ col_f, row_f = inv_transform * (outlet_x, outlet_y)
 
 # Check for NaN
 if np.isnan(row_f) or np.isnan(col_f):
-    st.error("Outlet coordinates are invalid or outside DEM bounds. Please select a point within the DEM.")
+    st.error("Outlet coordinates are invalid or outside DEM bounds.")
     st.stop()
 
-# Clamp values to DEM grid
 row = int(np.clip(np.floor(row_f), 0, dem_arr.shape[0]-1))
 col = int(np.clip(np.floor(col_f), 0, dem_arr.shape[1]-1))
-
 st.write(f"Outlet mapped to DEM pixel row={row}, col={col} (clamped to DEM bounds)")
 
 # -----------------------------
