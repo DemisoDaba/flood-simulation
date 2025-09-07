@@ -6,7 +6,7 @@ shapely
 folium
 streamlit-folium
 pyproj
-pysheds
+pysheds>=0.2.5
 
 
 
