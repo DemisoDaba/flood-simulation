@@ -140,8 +140,24 @@ st.write(f"Outlet mapped to DEM pixel row={row}, col={col} (clamped to DEM bound
 # -----------------------------
 st.write("## 3) Running hydrological preprocessing with pysheds...")
 
-grid = Grid.from_raster(temp_dem_path, data_name='dem')
-grid.fill_depressions('dem', out_name='flooded_dem')
+# Re-write DEM to ensure proper nodata handling
+safe_dem_path = os.path.join(tempfile.gettempdir(), "safe_dem.tif")
+with rasterio.open(
+    safe_dem_path,
+    'w',
+    driver='GTiff',
+    height=dem_arr.shape[0],
+    width=dem_arr.shape[1],
+    count=1,
+    dtype='float32',
+    crs=dem_crs,
+    transform=dem_transform,
+    nodata=np.nan
+) as dst:
+    dst.write(np.nan_to_num(dem_arr, nan=-9999).astype('float32'), 1)
+
+grid = Grid.from_raster(safe_dem_path, data_name='dem')
+grid.fill_depressions('dem', out_name='flooded_dem', nodata=-9999)
 grid.resolve_flats('flooded_dem', out_name='inflated_dem')
 grid.flowdir(data='inflated_dem', out_name='dir', dirmap=Grid.D8)
 grid.accumulation(data='dir', out_name='acc')
