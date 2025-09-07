@@ -1,9 +1,11 @@
+# delineate_watershed_pysheds_fixed.py
 """
 Streamlit app: Delineate watershed (upstream area) from an outlet using a local DEM (GeoTIFF) with pysheds.
 No GEE required.
 
 Dependencies:
 streamlit
+streamlit-autorefresh
 numpy
 rasterio
 geopandas
@@ -15,6 +17,7 @@ pysheds
 """
 
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 import numpy as np
 import rasterio
 from rasterio.features import shapes
@@ -28,7 +31,6 @@ import os
 import tempfile
 import json
 from shapely.ops import unary_union
-import time
 
 # -----------------------------
 # Streamlit page setup
@@ -59,9 +61,27 @@ with rasterio.open(temp_dem_path) as src:
     dem_arr = src.read(1).astype('float64')
     dem_nodata = src.nodatavals[0]
 
-# Replace nodata with np.nan
+# Replace nodata / NaN with -9999 for pysheds
 if dem_nodata is not None:
-    dem_arr[dem_arr == dem_nodata] = np.nan
+    dem_arr[dem_arr == dem_nodata] = -9999
+else:
+    dem_arr[np.isnan(dem_arr)] = -9999
+
+# Save cleaned DEM for pysheds
+clean_dem_path = os.path.join(tempfile.gettempdir(), "cleaned_dem.tif")
+with rasterio.open(
+    clean_dem_path,
+    'w',
+    driver='GTiff',
+    height=dem_arr.shape[0],
+    width=dem_arr.shape[1],
+    count=1,
+    dtype=dem_arr.dtype,
+    crs=dem_crs,
+    transform=dem_transform,
+    nodata=-9999
+) as dst:
+    dst.write(dem_arr, 1)
 
 st.sidebar.write(f"DEM CRS: {dem_crs}")
 st.sidebar.write(f"DEM bounds: {dem_bounds}")
@@ -76,6 +96,7 @@ cent_y = (dem_bounds.top + dem_bounds.bottom) / 2.0
 cent_x = (dem_bounds.left + dem_bounds.right) / 2.0
 m = folium.Map(location=[cent_y, cent_x], zoom_start=9)
 
+# DEM bounds rectangle
 folium.Rectangle(
     bounds=[[dem_bounds.bottom, dem_bounds.left], [dem_bounds.top, dem_bounds.right]],
     color="blue", weight=1, fill=False
@@ -84,38 +105,37 @@ folium.Rectangle(
 st_map = st_folium(m, height=450, returned_objects=["last_clicked"])
 manual_coords = st.sidebar.text_input("Manual outlet lat,lon (e.g. 9.0,38.7)")
 
-# Wait up to 20 seconds for user input
-wait_seconds = 20
-start_time = time.time()
-clicked = None
+# -----------------------------
+# Auto-select DEM center after 20 seconds
+# -----------------------------
+count = st_autorefresh(interval=1000, limit=20, key="autorefresh")
+
+clicked = st_map.get("last_clicked") if st_map else None
 outlet_lat, outlet_lon = None, None
 
-while time.time() - start_time < wait_seconds:
-    clicked = st_map.get("last_clicked") if st_map else None
-    if clicked:
-        outlet_lat = clicked["lat"]
-        outlet_lon = clicked["lng"]
-        st.sidebar.success(f"Clicked: {outlet_lat:.6f}, {outlet_lon:.6f}")
-        break
-    elif manual_coords:
-        try:
-            lat, lon = [float(x.strip()) for x in manual_coords.split(",")]
-            outlet_lat, outlet_lon = lat, lon
-            st.sidebar.success(f"Using manual coords: {lat:.6f}, {lon:.6f}")
-            break
-        except:
-            st.sidebar.error("Use format: lat,lon")
-            st.stop()
-    time.sleep(1)
-
-# If no input after wait, auto-use DEM center
-if outlet_lat is None or outlet_lon is None:
+if clicked:
+    outlet_lat = clicked["lat"]
+    outlet_lon = clicked["lng"]
+    st.sidebar.success(f"Clicked: {outlet_lat:.6f}, {outlet_lon:.6f}")
+elif manual_coords:
+    try:
+        lat, lon = [float(x.strip()) for x in manual_coords.split(",")]
+        outlet_lat, outlet_lon = lat, lon
+        st.sidebar.success(f"Using manual coords: {lat:.6f}, {lon:.6f}")
+    except:
+        st.sidebar.error("Use format: lat,lon")
+        st.stop()
+elif count >= 20:
+    # Auto-select DEM center
     if dem_crs.to_string() == "EPSG:4326":
         outlet_lat, outlet_lon = cent_y, cent_x
     else:
         transformer = Transformer.from_crs(dem_crs, "EPSG:4326", always_xy=True)
         outlet_lon, outlet_lat = transformer.transform(cent_x, cent_y)
-    st.sidebar.info(f"No outlet selected in {wait_seconds}s. Auto-using DEM center: {outlet_lat:.6f}, {outlet_lon:.6f}")
+    st.sidebar.info(f"No outlet selected in 20s. Auto-using DEM center: {outlet_lat:.6f}, {outlet_lon:.6f}")
+else:
+    st.info("Click map or input coordinates and wait 20s to auto-select DEM center.")
+    st.stop()
 
 # -----------------------------
 # 3) Convert outlet to DEM CRS & row/col safely
@@ -142,7 +162,7 @@ st.write(f"Outlet mapped to DEM pixel row={row}, col={col} (clamped to DEM bound
 # -----------------------------
 st.write("## 3) Running hydrological preprocessing with pysheds...")
 
-grid = Grid.from_raster(temp_dem_path, data_name='dem')
+grid = Grid.from_raster(clean_dem_path, data_name='dem')
 grid.fill_depressions('dem', out_name='flooded_dem')
 grid.resolve_flats('flooded_dem', out_name='inflated_dem')
 grid.flowdir(data='inflated_dem', out_name='dir', dirmap=Grid.D8)
