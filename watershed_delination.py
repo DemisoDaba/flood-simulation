@@ -140,10 +140,11 @@ st.write(f"Outlet mapped to DEM pixel row={row}, col={col} (clamped to DEM bound
 # -----------------------------
 st.write("## 3) Running hydrological preprocessing with pysheds...")
 
-# Ensure DEM is float32 and nodata=-9999
-safe_dem_path = os.path.join(tempfile.gettempdir(), "safe_dem.tif")
+# 1) Prepare DEM: replace nan with nodata=-9999 and cast to float32
 dem_cleaned = np.where(np.isnan(dem_arr), -9999, dem_arr).astype('float32')
 
+# 2) Save temporary cleaned DEM
+safe_dem_path = os.path.join(tempfile.gettempdir(), "safe_dem.tif")
 with rasterio.open(
     safe_dem_path,
     'w',
@@ -158,19 +159,23 @@ with rasterio.open(
 ) as dst:
     dst.write(dem_cleaned, 1)
 
-# Load DEM into pysheds Grid safely
+# 3) Load DEM into Grid
 grid = Grid()
-grid.read_raster(safe_dem_path, data_name='dem')
+grid.read_raster(safe_dem_path, data_name='dem', dtype='float32', nodata=-9999)
 
-# Hydrological preprocessing
-grid.fill_depressions(data='dem', out_name='flooded_dem', nodata=-9999)
-grid.resolve_flats(data='flooded_dem', out_name='inflated_dem')
-grid.flowdir(data='inflated_dem', out_name='dir', dirmap=Grid.D8)
-grid.accumulation(data='dir', out_name='acc')
+# 4) Ensure DEM is recognized as Raster object
+dem_raster = grid.view('dem')  # This returns a Raster instance for pysheds
+if dem_raster is None:
+    st.error("DEM not loaded correctly into pysheds Grid.")
+    st.stop()
 
+# 5) Hydrological preprocessing
+grid.fill_depressions(dem_raster, out_name='flooded_dem', nodata=-9999)
+grid.resolve_flats('flooded_dem', out_name='inflated_dem')
+grid.flowdir('inflated_dem', out_name='dir', dirmap=Grid.D8)
+grid.accumulation('dir', out_name='acc')
 
 st.success("Hydrological preprocessing complete!")
-
 
 # -----------------------------
 # 5) Delineate upstream basin
