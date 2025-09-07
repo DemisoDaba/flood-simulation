@@ -1,4 +1,3 @@
-# delineate_watershed_pysheds.py
 """
 Streamlit app: Delineate watershed (upstream area) from an outlet using a local DEM (GeoTIFF) with pysheds.
 No GEE required.
@@ -77,7 +76,7 @@ cent_y = (dem_bounds.top + dem_bounds.bottom) / 2.0
 cent_x = (dem_bounds.left + dem_bounds.right) / 2.0
 m = folium.Map(location=[cent_y, cent_x], zoom_start=9)
 
-# Add DEM bounds rectangle (without popup to avoid st_folium error)
+# Add DEM bounds rectangle
 folium.Rectangle(
     bounds=[[dem_bounds.bottom, dem_bounds.left], [dem_bounds.top, dem_bounds.right]],
     color="blue", weight=1, fill=False
@@ -106,7 +105,7 @@ else:
     st.stop()
 
 # -----------------------------
-# 3) Convert outlet to DEM CRS & row/col
+# 3) Convert outlet to DEM CRS & row/col safely
 # -----------------------------
 if dem_crs.to_string() != "EPSG:4326":
     transformer = Transformer.from_crs("EPSG:4326", dem_crs, always_xy=True)
@@ -117,14 +116,14 @@ else:
 inv_transform = ~dem_transform
 col_f, row_f = inv_transform * (outlet_x, outlet_y)
 
-# -----------------------------
-# Clamp outlet to DEM bounds
-# -----------------------------
-row = int(np.floor(row_f))
-col = int(np.floor(col_f))
+# Check for NaN
+if np.isnan(row_f) or np.isnan(col_f):
+    st.error("Outlet coordinates are invalid or outside DEM bounds. Please select a point within the DEM.")
+    st.stop()
 
-row = max(0, min(row, dem_arr.shape[0]-1))
-col = max(0, min(col, dem_arr.shape[1]-1))
+# Clamp values to DEM grid
+row = int(np.clip(np.floor(row_f), 0, dem_arr.shape[0]-1))
+col = int(np.clip(np.floor(col_f), 0, dem_arr.shape[1]-1))
 
 st.write(f"Outlet mapped to DEM pixel row={row}, col={col} (clamped to DEM bounds)")
 
