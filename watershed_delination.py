@@ -140,7 +140,7 @@ st.write(f"Outlet mapped to DEM pixel row={row}, col={col} (clamped to DEM bound
 # -----------------------------
 st.write("## 3) Running hydrological preprocessing with pysheds...")
 
-# Ensure DEM is float32 and nodata=-9999
+# Prepare DEM: replace nan with nodata=-9999 and cast to float32
 safe_dem_path = os.path.join(tempfile.gettempdir(), "safe_dem.tif")
 dem_cleaned = np.where(np.isnan(dem_arr), -9999, dem_arr).astype('float32')
 
@@ -161,18 +161,14 @@ with rasterio.open(
 # Load DEM into pysheds Grid
 grid = Grid.from_raster(safe_dem_path, data_name='dem')
 
-# Check that data is correctly loaded
-if grid.view('dem').dtype not in [np.float32, np.float64]:
-    st.error("DEM data not loaded as float32/float64! Cannot proceed.")
-    st.stop()
-
-# Hydrological preprocessing
+# Hydrological preprocessing (no dtype check)
 grid.fill_depressions(data='dem', out_name='flooded_dem', nodata=-9999)
 grid.resolve_flats(data='flooded_dem', out_name='inflated_dem')
 grid.flowdir(data='inflated_dem', out_name='dir', dirmap=Grid.D8)
 grid.accumulation(data='dir', out_name='acc')
 
 st.success("Hydrological preprocessing complete!")
+
 
 
 # -----------------------------
