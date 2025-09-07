@@ -1,9 +1,9 @@
 # delineate_watershed_pysheds.py
 """
-Streamlit app: Delineate watershed (upstream area) from an outlet point using a local DEM (GeoTIFF) using pysheds.
+Streamlit app: Delineate watershed (upstream area) from an outlet using a local DEM (GeoTIFF) with pysheds.
 No GEE required.
 
-Dependencies (works on Streamlit Cloud):
+Dependencies:
 streamlit
 numpy
 rasterio
@@ -19,7 +19,7 @@ import streamlit as st
 import numpy as np
 import rasterio
 from rasterio.features import shapes
-from shapely.geometry import shape, mapping
+from shapely.geometry import shape
 import geopandas as gpd
 import folium
 from streamlit_folium import st_folium
@@ -28,8 +28,11 @@ from pysheds.grid import Grid
 import os
 import tempfile
 import json
-from collections import deque
+from shapely.ops import unary_union
 
+# -----------------------------
+# Streamlit page setup
+# -----------------------------
 st.set_page_config(page_title="Local Watershed Delineation", layout="wide")
 st.title("Watershed Delineation from Outlet (Local DEM) — pysheds version")
 
@@ -55,7 +58,6 @@ with rasterio.open(temp_dem_path) as src:
     dem_bounds = src.bounds
     dem_arr = src.read(1).astype('float64')
     dem_nodata = src.nodatavals[0]
-    dem_profile = src.profile
 
 # Replace nodata with np.nan
 if dem_nodata is not None:
@@ -70,12 +72,15 @@ st.sidebar.write(f"DEM bounds: {dem_bounds}")
 st.write("## 2) Choose outlet point")
 st.write("Click on map to place outlet, or enter lat,lon manually in sidebar.")
 
+# Center map on DEM
 cent_y = (dem_bounds.top + dem_bounds.bottom) / 2.0
 cent_x = (dem_bounds.left + dem_bounds.right) / 2.0
 m = folium.Map(location=[cent_y, cent_x], zoom_start=9)
+
+# Add DEM bounds rectangle (without popup to avoid st_folium error)
 folium.Rectangle(
     bounds=[[dem_bounds.bottom, dem_bounds.left], [dem_bounds.top, dem_bounds.right]],
-    color="blue", weight=1, fill=False, popup="DEM bounds"
+    color="blue", weight=1, fill=False
 ).add_to(m)
 
 st_map = st_folium(m, height=450, returned_objects=["last_clicked"])
@@ -125,14 +130,9 @@ st.write(f"Outlet mapped to DEM pixel row={row}, col={col}")
 st.write("## 3) Running hydrological preprocessing with pysheds...")
 
 grid = Grid.from_raster(temp_dem_path, data_name='dem')
-# Fill depressions
 grid.fill_depressions('dem', out_name='flooded_dem')
-# Resolve flats
 grid.resolve_flats('flooded_dem', out_name='inflated_dem')
-# Flow direction
 grid.flowdir(data='inflated_dem', out_name='dir', dirmap=Grid.D8)
-
-# Compute flow accumulation
 grid.accumulation(data='dir', out_name='acc')
 
 # -----------------------------
@@ -140,10 +140,8 @@ grid.accumulation(data='dir', out_name='acc')
 # -----------------------------
 st.write("Computing upstream basin...")
 
-# Use outlet coordinates in DEM CRS
 basin_mask = grid.catchment(x=outlet_x, y=outlet_y, data='dir', dirmap=Grid.D8)
 upstream_mask = basin_mask.astype(bool)
-
 st.write(f"Upstream mask has {upstream_mask.sum()} cells.")
 
 # -----------------------------
@@ -157,12 +155,8 @@ if not polys:
     st.error("No polygon generated from mask. Check outlet location.")
     st.stop()
 
-from shapely.ops import unary_union
 basin_geom = unary_union(polys)
-
 gdf = gpd.GeoDataFrame({"id":[1]}, geometry=[basin_geom], crs=dem_crs.to_string())
-
-# Convert to WGS84 for folium
 gdf_wgs84 = gdf.to_crs("EPSG:4326") if dem_crs.to_string() != "EPSG:4326" else gdf.copy()
 
 # -----------------------------
@@ -172,9 +166,11 @@ st.write("## 4) Result: Delineated Basin")
 st.write(gdf)
 
 m2 = folium.Map(location=[outlet_lat, outlet_lon], zoom_start=11)
-folium.GeoJson(data=json.loads(gdf_wgs84.to_json()), 
-               name="Basin", 
-               style_function=lambda x: {"fillColor":"#00AAFF","color":"#0066cc","weight":2,"fillOpacity":0.4}).add_to(m2)
+folium.GeoJson(
+    data=json.loads(gdf_wgs84.to_json()),
+    name="Basin",
+    style_function=lambda x: {"fillColor":"#00AAFF","color":"#0066cc","weight":2,"fillOpacity":0.4}
+).add_to(m2)
 folium.Marker(location=[outlet_lat, outlet_lon], popup="Outlet", icon=folium.Icon(color="red")).add_to(m2)
 st_folium(m2, height=600)
 
