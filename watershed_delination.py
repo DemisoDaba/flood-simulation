@@ -28,7 +28,11 @@ import os
 import tempfile
 import json
 from shapely.ops import unary_union
-import time
+
+# -----------------------------
+# Disable Streamlit file watcher to avoid inotify limit errors
+# -----------------------------
+st.set_option('server.runOnSave', False)
 
 # -----------------------------
 # Streamlit page setup
@@ -72,10 +76,12 @@ st.sidebar.write(f"DEM bounds: {dem_bounds}")
 st.write("## 2) Choose outlet point")
 st.write("Click on map to place outlet, or enter lat,lon manually in sidebar.")
 
+# Center map on DEM
 cent_y = (dem_bounds.top + dem_bounds.bottom) / 2.0
 cent_x = (dem_bounds.left + dem_bounds.right) / 2.0
 m = folium.Map(location=[cent_y, cent_x], zoom_start=9)
 
+# Add DEM bounds rectangle
 folium.Rectangle(
     bounds=[[dem_bounds.bottom, dem_bounds.left], [dem_bounds.top, dem_bounds.right]],
     color="blue", weight=1, fill=False
@@ -84,15 +90,12 @@ folium.Rectangle(
 st_map = st_folium(m, height=450, returned_objects=["last_clicked"])
 manual_coords = st.sidebar.text_input("Manual outlet lat,lon (e.g. 9.0,38.7)")
 
-# -----------------------------
-# Auto-select DEM center after 20s
-# -----------------------------
-if "start_time" not in st.session_state:
-    st.session_state.start_time = time.time()
-
 clicked = st_map.get("last_clicked") if st_map else None
 outlet_lat, outlet_lon = None, None
 
+# -----------------------------
+# Auto-select DEM center after 20s (simulated by using default if not clicked)
+# -----------------------------
 if clicked:
     outlet_lat = clicked["lat"]
     outlet_lon = clicked["lng"]
@@ -106,14 +109,13 @@ elif manual_coords:
         st.sidebar.error("Use format: lat,lon")
         st.stop()
 else:
-    elapsed = time.time() - st.session_state.start_time
-    if elapsed >= 20:
-        # Auto-select DEM center
+    # Auto-select DEM center if nothing selected
+    if dem_crs.to_string() == "EPSG:4326":
         outlet_lat, outlet_lon = cent_y, cent_x
-        st.sidebar.info(f"No outlet selected in 20s. Auto-using DEM center: {outlet_lat:.6f}, {outlet_lon:.6f}")
     else:
-        st.info(f"Click map or input coordinates. Auto-select in {int(20 - elapsed)} seconds.")
-        st.stop()
+        transformer = Transformer.from_crs(dem_crs, "EPSG:4326", always_xy=True)
+        outlet_lon, outlet_lat = transformer.transform(cent_x, cent_y)
+    st.sidebar.info(f"No outlet selected. Auto-using DEM center: {outlet_lat:.6f}, {outlet_lon:.6f}")
 
 # -----------------------------
 # 3) Convert outlet to DEM CRS & row/col safely
@@ -127,7 +129,7 @@ else:
 inv_transform = ~dem_transform
 col_f, row_f = inv_transform * (outlet_x, outlet_y)
 
-# Check for NaN
+# Handle NaN / clamp to DEM bounds
 if np.isnan(row_f) or np.isnan(col_f):
     st.error("Outlet coordinates are invalid or outside DEM bounds.")
     st.stop()
