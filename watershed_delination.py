@@ -4,6 +4,7 @@ No GEE required.
 
 Dependencies:
 streamlit
+streamlit-autorefresh
 numpy
 rasterio
 geopandas
@@ -15,6 +16,7 @@ pysheds
 """
 
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 import numpy as np
 import rasterio
 from rasterio.features import shapes
@@ -85,10 +87,14 @@ folium.Rectangle(
 st_map = st_folium(m, height=450, returned_objects=["last_clicked"])
 manual_coords = st.sidebar.text_input("Manual outlet lat,lon (e.g. 9.0,38.7)")
 
+# -----------------------------
+# Auto-select DEM center after 20 seconds
+# -----------------------------
+count = st_autorefresh(interval=1000, limit=20, key="autorefresh")
+
 clicked = st_map.get("last_clicked") if st_map else None
 outlet_lat, outlet_lon = None, None
 
-# Use clicked point or manual input
 if clicked:
     outlet_lat = clicked["lat"]
     outlet_lon = clicked["lng"]
@@ -101,18 +107,17 @@ elif manual_coords:
     except:
         st.sidebar.error("Use format: lat,lon")
         st.stop()
-else:
-    # Provide button to auto-select DEM center
-    if st.sidebar.button("Use DEM center as outlet"):
-        if dem_crs.to_string() == "EPSG:4326":
-            outlet_lat, outlet_lon = cent_y, cent_x
-        else:
-            transformer = Transformer.from_crs(dem_crs, "EPSG:4326", always_xy=True)
-            outlet_lon, outlet_lat = transformer.transform(cent_x, cent_y)
-        st.sidebar.info(f"Using DEM center: {outlet_lat:.6f}, {outlet_lon:.6f}")
+elif count >= 20:
+    # Auto-select DEM center
+    if dem_crs.to_string() == "EPSG:4326":
+        outlet_lat, outlet_lon = cent_y, cent_x
     else:
-        st.info("Click map, input coordinates, or press 'Use DEM center as outlet'.")
-        st.stop()
+        transformer = Transformer.from_crs(dem_crs, "EPSG:4326", always_xy=True)
+        outlet_lon, outlet_lat = transformer.transform(cent_x, cent_y)
+    st.sidebar.info(f"No outlet selected in 20s. Auto-using DEM center: {outlet_lat:.6f}, {outlet_lon:.6f}")
+else:
+    st.info("Click map, input coordinates, or wait 20s to auto-select DEM center.")
+    st.stop()
 
 # -----------------------------
 # 3) Convert outlet to DEM CRS & row/col safely
@@ -161,15 +166,13 @@ with rasterio.open(
 # Load DEM into pysheds Grid
 grid = Grid.from_raster(safe_dem_path, data_name='dem')
 
-# Hydrological preprocessing (no dtype check)
+# Hydrological preprocessing
 grid.fill_depressions('dem', out_name='flooded_dem', nodata=-9999)
 grid.resolve_flats('flooded_dem', out_name='inflated_dem')
 grid.flowdir('inflated_dem', out_name='dir', dirmap=Grid.D8)
 grid.accumulation('dir', out_name='acc')
 
 st.success("Hydrological preprocessing complete!")
-
-
 
 # -----------------------------
 # 5) Delineate upstream basin
