@@ -1,57 +1,49 @@
-# delineate_watershed_local.py
+# delineate_watershed_pysheds.py
 """
-Streamlit app: Delineate watershed (upstream area) from an outlet point using a local DEM (GeoTIFF).
+Streamlit app: Delineate watershed (upstream area) from an outlet point using a local DEM (GeoTIFF) using pysheds.
 No GEE required.
 
-Dependencies (requirements.txt):
+Dependencies (works on Streamlit Cloud):
 streamlit
-streamlit-autorefresh
-tenacity
-rasterio
-richdem
 numpy
+rasterio
 geopandas
 shapely
 folium
 streamlit-folium
 pyproj
-matplotlib
+pysheds
 """
 
 import streamlit as st
+import numpy as np
 import rasterio
 from rasterio.features import shapes
-import numpy as np
-import richdem as rd
+from shapely.geometry import shape, mapping
 import geopandas as gpd
-from shapely.geometry import shape
 import folium
 from streamlit_folium import st_folium
-import json
-import tempfile
-import os
 from pyproj import Transformer
+from pysheds.grid import Grid
+import os
+import tempfile
+import json
 from collections import deque
-from shapely.ops import unary_union
 
 st.set_page_config(page_title="Local Watershed Delineation", layout="wide")
-st.title("Watershed Delineation from Outlet (Local DEM) — No GEE")
+st.title("Watershed Delineation from Outlet (Local DEM) — pysheds version")
 
-# --------------------------
+# -----------------------------
 # 1) Upload DEM
-# --------------------------
+# -----------------------------
 st.sidebar.header("1) Upload DEM (GeoTIFF)")
-dem_file = st.sidebar.file_uploader("Upload DEM GeoTIFF", type=["tif","tiff"])
-st.sidebar.markdown("""
-**Notes**
-- DEM must have a CRS (e.g., EPSG:4326 or projected CRS).
-- For speed, clip your DEM to the study area before upload.
-""")
+dem_file = st.sidebar.file_uploader("Upload DEM GeoTIFF", type=["tif", "tiff"])
+
 if dem_file is None:
     st.info("Please upload a DEM GeoTIFF to proceed.")
     st.stop()
 
-# Save temporary DEM
+# Save uploaded DEM to temporary file
 temp_dem_path = os.path.join(tempfile.gettempdir(), "uploaded_dem.tif")
 with open(temp_dem_path, "wb") as f:
     f.write(dem_file.getbuffer())
@@ -65,164 +57,132 @@ with rasterio.open(temp_dem_path) as src:
     dem_nodata = src.nodatavals[0]
     dem_profile = src.profile
 
-# Handle nodata
+# Replace nodata with np.nan
 if dem_nodata is not None:
-    dem_arr[dem_arr==dem_nodata] = np.nan
+    dem_arr[dem_arr == dem_nodata] = np.nan
 
 st.sidebar.write(f"DEM CRS: {dem_crs}")
 st.sidebar.write(f"DEM bounds: {dem_bounds}")
 
-# --------------------------
+# -----------------------------
 # 2) Select outlet
-# --------------------------
+# -----------------------------
 st.write("## 2) Choose outlet point")
-st.write("Click on the map or enter lat,lon manually in the sidebar.")
+st.write("Click on map to place outlet, or enter lat,lon manually in sidebar.")
 
-# Folium map
-cent_y = (dem_bounds.top + dem_bounds.bottom)/2
-cent_x = (dem_bounds.left + dem_bounds.right)/2
+cent_y = (dem_bounds.top + dem_bounds.bottom) / 2.0
+cent_x = (dem_bounds.left + dem_bounds.right) / 2.0
 m = folium.Map(location=[cent_y, cent_x], zoom_start=9)
 folium.Rectangle(
-    bounds=[[dem_bounds.bottom, dem_bounds.left],[dem_bounds.top, dem_bounds.right]],
+    bounds=[[dem_bounds.bottom, dem_bounds.left], [dem_bounds.top, dem_bounds.right]],
     color="blue", weight=1, fill=False, popup="DEM bounds"
 ).add_to(m)
 
-st_map = st_folium(m, height=450, returned_objects=["last_clicked"]) or {}
-clicked = st_map.get("last_clicked") if st_map else None
+st_map = st_folium(m, height=450, returned_objects=["last_clicked"])
+manual_coords = st.sidebar.text_input("Manual outlet lat,lon (e.g. 9.0,38.7)")
 
-# Manual coords
-manual_coords = st.sidebar.text_input("Manual outlet lat,lon (e.g., 9.0,38.7)")
+clicked = st_map.get("last_clicked") if st_map else None
 outlet_lat, outlet_lon = None, None
 
 if clicked:
-    outlet_lat, outlet_lon = clicked["lat"], clicked["lng"]
+    outlet_lat = clicked["lat"]
+    outlet_lon = clicked["lng"]
     st.sidebar.success(f"Clicked: {outlet_lat:.6f}, {outlet_lon:.6f}")
 elif manual_coords:
     try:
-        outlet_lat, outlet_lon = [float(x.strip()) for x in manual_coords.split(",")]
-        st.sidebar.success(f"Using manual coords: {outlet_lat:.6f}, {outlet_lon:.6f}")
+        lat, lon = [float(x.strip()) for x in manual_coords.split(",")]
+        outlet_lat, outlet_lon = lat, lon
+        st.sidebar.success(f"Using manual coords: {lat:.6f}, {lon:.6f}")
     except:
-        st.sidebar.error("Could not parse manual coords. Use format: lat,lon")
+        st.sidebar.error("Use format: lat,lon")
         st.stop()
 else:
-    st.info("Click map or input coordinates to continue.")
+    st.info("Click map or input coordinates and press 'Delineate watershed'.")
     st.stop()
 
-# Convert lat/lon -> DEM CRS
+# -----------------------------
+# 3) Convert outlet to DEM CRS & row/col
+# -----------------------------
 if dem_crs.to_string() != "EPSG:4326":
     transformer = Transformer.from_crs("EPSG:4326", dem_crs, always_xy=True)
-    outlet_x_dem, outlet_y_dem = transformer.transform(outlet_lon, outlet_lat)
+    outlet_x, outlet_y = transformer.transform(outlet_lon, outlet_lat)
 else:
-    outlet_x_dem, outlet_y_dem = outlet_lon, outlet_lat
+    outlet_x, outlet_y = outlet_lon, outlet_lat
 
-# Convert DEM coordinates -> row,col
 inv_transform = ~dem_transform
-col_f, row_f = inv_transform * (outlet_x_dem, outlet_y_dem)
+col_f, row_f = inv_transform * (outlet_x, outlet_y)
 row, col = int(np.floor(row_f)), int(np.floor(col_f))
 
-nrows, ncols = dem_arr.shape
-if not (0<=row<nrows and 0<=col<ncols):
-    st.error("Outlet outside DEM bounds.")
+if not (0 <= row < dem_arr.shape[0] and 0 <= col < dem_arr.shape[1]):
+    st.error("Outlet is outside DEM bounds.")
     st.stop()
 
 st.write(f"Outlet mapped to DEM pixel row={row}, col={col}")
 
-# --------------------------
-# 3) Hydrological processing
-# --------------------------
-st.write("## 3) Running hydrological preprocessing...")
+# -----------------------------
+# 4) Hydrological processing with pysheds
+# -----------------------------
+st.write("## 3) Running hydrological preprocessing with pysheds...")
 
-dem_work = dem_arr.copy()
-nan_mask = np.isnan(dem_work)
-if np.any(nan_mask):
-    dem_work[nan_mask] = np.nanmax(dem_work)+1000
-
-rd_dem = rd.rdarray(dem_work, no_data=np.nan)
-rd_dem.geotransform = dem_transform[:6] if hasattr(dem_transform, '__getitem__') else (
-    dem_transform.a, dem_transform.b, dem_transform.c, dem_transform.d, dem_transform.e, dem_transform.f
-)
-
+grid = Grid.from_raster(temp_dem_path, data_name='dem')
 # Fill depressions
-try:
-    rd_filled = rd.FillDepressions(rd_dem, in_place=False)
-except:
-    rd_filled = rd.FillDepressions(rd_dem, in_place=True)
-
+grid.fill_depressions('dem', out_name='flooded_dem')
+# Resolve flats
+grid.resolve_flats('flooded_dem', out_name='inflated_dem')
 # Flow direction
-flow_dir = rd.FlowDirectionD8(rd_filled)
+grid.flowdir(data='inflated_dem', out_name='dir', dirmap=Grid.D8)
 
-# Flow accumulation
-acc = rd.FlowAccumulation(flow_dir, method='D8')
-acc_arr = np.array(acc)
-st.write("Flow accumulation computed.")
+# Compute flow accumulation
+grid.accumulation(data='dir', out_name='acc')
 
-# --------------------------
-# 4) Compute upstream mask
-# --------------------------
-fdir = np.array(flow_dir, dtype=np.int32)
-dir_to_delta = {1:(0,1),2:(1,1),3:(1,0),4:(1,-1),5:(0,-1),6:(-1,-1),7:(-1,0),8:(-1,1)}
-visited = np.zeros_like(fdir,dtype=np.uint8)
-q = deque()
-visited[row,col]=1
-q.append((row,col))
+# -----------------------------
+# 5) Delineate upstream basin
+# -----------------------------
+st.write("Computing upstream basin...")
 
-neigh_offsets = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]
-while q:
-    i,j = q.popleft()
-    for di,dj in neigh_offsets:
-        ni,nj=i+di,j+dj
-        if 0<=ni<nrows and 0<=nj<ncols and visited[ni,nj]==0:
-            val=int(fdir[ni,nj])
-            if val==0: continue
-            d=dir_to_delta.get(val)
-            if d is None: continue
-            dest_i,dest_j=ni+d[0], nj+d[1]
-            if dest_i==i and dest_j==j:
-                visited[ni,nj]=1
-                q.append((ni,nj))
+# Use outlet coordinates in DEM CRS
+basin_mask = grid.catchment(x=outlet_x, y=outlet_y, data='dir', dirmap=Grid.D8)
+upstream_mask = basin_mask.astype(bool)
 
-upstream_mask = visited.astype(bool)
-if np.any(nan_mask):
-    upstream_mask[nan_mask]=False
+st.write(f"Upstream mask has {upstream_mask.sum()} cells.")
 
-st.write(f"Computed upstream mask — {upstream_mask.sum()} cells.")
-
-# --------------------------
-# 5) Convert mask -> polygon
-# --------------------------
+# -----------------------------
+# 6) Convert mask to polygon
+# -----------------------------
 mask_uint8 = upstream_mask.astype(np.uint8)
 shapes_gen = shapes(mask_uint8, mask=mask_uint8==1, transform=dem_transform)
-
-polys=[]
-for geom,val in shapes_gen:
-    if val==1:
-        polys.append(shape(geom))
+polys = [shape(geom) for geom, val in shapes_gen if val==1]
 
 if not polys:
-    st.error("No polygon generated. Try another outlet or DEM.")
+    st.error("No polygon generated from mask. Check outlet location.")
     st.stop()
 
+from shapely.ops import unary_union
 basin_geom = unary_union(polys)
+
 gdf = gpd.GeoDataFrame({"id":[1]}, geometry=[basin_geom], crs=dem_crs.to_string())
 
-st.write("## 5) Delineated Basin")
+# Convert to WGS84 for folium
+gdf_wgs84 = gdf.to_crs("EPSG:4326") if dem_crs.to_string() != "EPSG:4326" else gdf.copy()
+
+# -----------------------------
+# 7) Display basin
+# -----------------------------
+st.write("## 4) Result: Delineated Basin")
 st.write(gdf)
 
-# Convert to WGS84 for folium
-gdf_wgs84 = gdf.to_crs("EPSG:4326") if dem_crs.to_string()!="EPSG:4326" else gdf.copy()
-
 m2 = folium.Map(location=[outlet_lat, outlet_lon], zoom_start=11)
-folium.GeoJson(data=json.loads(gdf_wgs84.to_json()),
-               name="Basin",
+folium.GeoJson(data=json.loads(gdf_wgs84.to_json()), 
+               name="Basin", 
                style_function=lambda x: {"fillColor":"#00AAFF","color":"#0066cc","weight":2,"fillOpacity":0.4}).add_to(m2)
-folium.Marker(location=[outlet_lat, outlet_lon],
-              popup="Outlet", icon=folium.Icon(color="red")).add_to(m2)
+folium.Marker(location=[outlet_lat, outlet_lon], popup="Outlet", icon=folium.Icon(color="red")).add_to(m2)
 st_folium(m2, height=600)
 
-# --------------------------
-# 6) Download GeoJSON
-# --------------------------
+# -----------------------------
+# 8) Download
+# -----------------------------
+st.write("### Download basin polygon")
 geojson_str = gdf_wgs84.to_json()
 st.download_button("Download basin GeoJSON", data=geojson_str, file_name="basin.geojson", mime="application/geo+json")
 
-st.success("Delineation complete. Ensure outlet is on a low-accumulation pixel for realistic watershed.")
+st.success("Delineation complete!")
