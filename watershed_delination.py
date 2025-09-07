@@ -159,7 +159,7 @@ with rasterio.open(
 # -----------------------------
 # pysheds Grid processing
 # -----------------------------
-from pysheds.raster import Raster
+
 
 # After writing safe_dem_path
 
