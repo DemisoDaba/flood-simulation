@@ -160,17 +160,18 @@ with rasterio.open(
     dst.write(dem_cleaned, 1)
 
 # 3) Create a Grid and read raster properly
-# 1) Create empty Grid
+# Create empty Grid
 grid = Grid()
 
-# 2) Read the cleaned DEM into the Grid as a proper Raster
+# Read DEM properly as a Raster
 grid.read_raster(safe_dem_path, data_name='dem', dtype='float32', nodata=-9999)
 
-# 3) Now hydrological preprocessing works
-grid.fill_depressions(data='dem', out_name='flooded_dem', nodata=-9999)
+# Now perform hydrological preprocessing
+grid.fill_depressions(data=grid.view('dem'), out_name='flooded_dem', nodata=-9999)
 grid.resolve_flats('flooded_dem', out_name='inflated_dem')
 grid.flowdir('inflated_dem', out_name='dir', dirmap=Grid.D8)
 grid.accumulation('dir', out_name='acc')
+
 
 
 st.success("Hydrological preprocessing complete!")
