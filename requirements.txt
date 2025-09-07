@@ -7,6 +7,6 @@ folium
 streamlit-folium
 pyproj
 pysheds
-streamlit-autorefresh
+
 
 
