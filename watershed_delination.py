@@ -158,14 +158,15 @@ with rasterio.open(
 ) as dst:
     dst.write(dem_cleaned, 1)
 
-# Load DEM into pysheds Grid
-grid = Grid.from_raster(safe_dem_path, data_name='dem')
+# Load DEM into pysheds Grid correctly
+grid = Grid()
+grid.add_raster(safe_dem_path, data_name='dem', dtype='float32', nodata=-9999)
 
 # Hydrological preprocessing
-grid.fill_depressions('dem', out_name='flooded_dem', nodata=-9999)
-grid.resolve_flats('flooded_dem', out_name='inflated_dem')
-grid.flowdir('inflated_dem', out_name='dir', dirmap=Grid.D8)
-grid.accumulation('dir', out_name='acc')
+grid.fill_depressions(data='dem', out_name='flooded_dem', nodata=-9999)
+grid.resolve_flats(data='flooded_dem', out_name='inflated_dem')
+grid.flowdir(data='inflated_dem', out_name='dir', dirmap=Grid.D8)
+grid.accumulation(data='dir', out_name='acc')
 
 st.success("Hydrological preprocessing complete!")
 
