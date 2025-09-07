@@ -161,15 +161,15 @@ with rasterio.open(
 # Create empty Grid
 grid = Grid()
 
-# Read DEM into Grid
+# Read DEM into Grid properly
 grid.read_raster(safe_dem_path, data_name='dem', dtype='float32', nodata=-9999)
 
-# Hydrological preprocessing
-# Pass 'dem' directly as the data name
-grid.fill_depressions(data='dem', out_name='flooded_dem', nodata=-9999)
+# Now pass the data name 'dem' (string) to fill_depressions
+grid.fill_depressions('dem', out_name='flooded_dem', nodata=-9999)
 grid.resolve_flats('flooded_dem', out_name='inflated_dem')
 grid.flowdir('inflated_dem', out_name='dir', dirmap=Grid.D8)
 grid.accumulation('dir', out_name='acc')
+
 
 st.success("Hydrological preprocessing complete!")
 
