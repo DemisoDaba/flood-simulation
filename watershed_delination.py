@@ -1,3 +1,4 @@
+# delineate_watershed_pysheds.py
 """
 Streamlit app: Delineate watershed (upstream area) from an outlet using a local DEM (GeoTIFF) with pysheds.
 No GEE required.
@@ -71,6 +72,7 @@ st.sidebar.write(f"DEM bounds: {dem_bounds}")
 st.write("## 2) Choose outlet point")
 st.write("Click on map to place outlet, or enter lat,lon manually in sidebar.")
 
+# Center map on DEM
 cent_y = (dem_bounds.top + dem_bounds.bottom) / 2.0
 cent_x = (dem_bounds.left + dem_bounds.right) / 2.0
 m = folium.Map(location=[cent_y, cent_x], zoom_start=9)
@@ -114,35 +116,28 @@ else:
 
 inv_transform = ~dem_transform
 col_f, row_f = inv_transform * (outlet_x, outlet_y)
-row, col = int(np.floor(row_f)), int(np.floor(col_f))
 
-if not (0 <= row < dem_arr.shape[0] and 0 <= col < dem_arr.shape[1]):
-    st.error("Outlet is outside DEM bounds.")
-    st.stop()
+# -----------------------------
+# Clamp outlet to DEM bounds
+# -----------------------------
+row = int(np.floor(row_f))
+col = int(np.floor(col_f))
 
-st.write(f"Outlet mapped to DEM pixel row={row}, col={col}")
+row = max(0, min(row, dem_arr.shape[0]-1))
+col = max(0, min(col, dem_arr.shape[1]-1))
+
+st.write(f"Outlet mapped to DEM pixel row={row}, col={col} (clamped to DEM bounds)")
 
 # -----------------------------
 # 4) Hydrological processing with pysheds
 # -----------------------------
 st.write("## 3) Running hydrological preprocessing with pysheds...")
 
-try:
-    grid = Grid()
-    # Add DEM as raster directly
-    grid.add_raster(dem_arr, transform=dem_transform, data_name='dem')
-    
-    # Fill depressions
-    grid.fill_depressions('dem', out_name='flooded_dem')
-    grid.resolve_flats('flooded_dem', out_name='inflated_dem')
-    
-    # Flow direction and accumulation
-    grid.flowdir(data='inflated_dem', out_name='dir', dirmap=Grid.D8)
-    grid.accumulation(data='dir', out_name='acc')
-
-except Exception as e:
-    st.error(f"Error processing DEM with pysheds: {e}")
-    st.stop()
+grid = Grid.from_raster(temp_dem_path, data_name='dem')
+grid.fill_depressions('dem', out_name='flooded_dem')
+grid.resolve_flats('flooded_dem', out_name='inflated_dem')
+grid.flowdir(data='inflated_dem', out_name='dir', dirmap=Grid.D8)
+grid.accumulation(data='dir', out_name='acc')
 
 # -----------------------------
 # 5) Delineate upstream basin
