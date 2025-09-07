@@ -140,27 +140,40 @@ st.write(f"Outlet mapped to DEM pixel row={row}, col={col} (clamped to DEM bound
 # -----------------------------
 st.write("## 3) Running hydrological preprocessing with pysheds...")
 
-# Re-write DEM to ensure proper nodata handling
+# Ensure DEM is float32 and nodata=-9999
 safe_dem_path = os.path.join(tempfile.gettempdir(), "safe_dem.tif")
+dem_cleaned = np.where(np.isnan(dem_arr), -9999, dem_arr).astype('float32')
+
 with rasterio.open(
     safe_dem_path,
     'w',
     driver='GTiff',
-    height=dem_arr.shape[0],
-    width=dem_arr.shape[1],
+    height=dem_cleaned.shape[0],
+    width=dem_cleaned.shape[1],
     count=1,
     dtype='float32',
     crs=dem_crs,
     transform=dem_transform,
-    nodata=np.nan
+    nodata=-9999
 ) as dst:
-    dst.write(np.nan_to_num(dem_arr, nan=-9999).astype('float32'), 1)
+    dst.write(dem_cleaned, 1)
 
+# Load DEM into pysheds Grid
 grid = Grid.from_raster(safe_dem_path, data_name='dem')
-grid.fill_depressions('dem', out_name='flooded_dem', nodata=-9999)
-grid.resolve_flats('flooded_dem', out_name='inflated_dem')
+
+# Check that data is correctly loaded
+if grid.view('dem').dtype not in [np.float32, np.float64]:
+    st.error("DEM data not loaded as float32/float64! Cannot proceed.")
+    st.stop()
+
+# Hydrological preprocessing
+grid.fill_depressions(data='dem', out_name='flooded_dem', nodata=-9999)
+grid.resolve_flats(data='flooded_dem', out_name='inflated_dem')
 grid.flowdir(data='inflated_dem', out_name='dir', dirmap=Grid.D8)
 grid.accumulation(data='dir', out_name='acc')
+
+st.success("Hydrological preprocessing complete!")
+
 
 # -----------------------------
 # 5) Delineate upstream basin
