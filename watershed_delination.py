@@ -102,7 +102,6 @@ elif manual_coords:
         st.sidebar.error("Use format: lat,lon")
         st.stop()
 else:
-    # Provide button to auto-select DEM center
     if st.sidebar.button("Use DEM center as outlet"):
         if dem_crs.to_string() == "EPSG:4326":
             outlet_lat, outlet_lon = cent_y, cent_x
@@ -126,7 +125,6 @@ else:
 inv_transform = ~dem_transform
 col_f, row_f = inv_transform * (outlet_x, outlet_y)
 
-# Check for NaN
 if np.isnan(row_f) or np.isnan(col_f):
     st.error("Outlet coordinates are invalid or outside DEM bounds.")
     st.stop()
@@ -158,11 +156,13 @@ with rasterio.open(
 ) as dst:
     dst.write(dem_cleaned, 1)
 
-# Create Grid and read DEM properly
+# -----------------------------
+# pysheds Grid processing
+# -----------------------------
 grid = Grid()
 grid.read_raster(safe_dem_path, data_name='dem', dtype='float32', nodata=-9999)
 
-# Hydrological preprocessing
+# Now pass the string name 'dem' (not array) to all pysheds functions
 grid.fill_depressions('dem', out_name='flooded_dem', nodata=-9999)
 grid.resolve_flats('flooded_dem', out_name='inflated_dem')
 grid.flowdir('inflated_dem', out_name='dir', dirmap=Grid.D8)
@@ -173,8 +173,7 @@ st.success("Hydrological preprocessing complete!")
 # -----------------------------
 # 5) Delineate upstream basin
 # -----------------------------
-st.write("## 4) Computing upstream basin...")
-
+st.write("Computing upstream basin...")
 basin_mask = grid.catchment(x=outlet_x, y=outlet_y, data='dir', dirmap=Grid.D8)
 upstream_mask = basin_mask.astype(bool)
 st.write(f"Upstream mask has {upstream_mask.sum()} cells.")
@@ -197,7 +196,7 @@ gdf_wgs84 = gdf.to_crs("EPSG:4326") if dem_crs.to_string() != "EPSG:4326" else g
 # -----------------------------
 # 7) Display basin
 # -----------------------------
-st.write("## 5) Result: Delineated Basin")
+st.write("## 4) Result: Delineated Basin")
 st.write(gdf)
 
 m2 = folium.Map(location=[outlet_lat, outlet_lon], zoom_start=11)
